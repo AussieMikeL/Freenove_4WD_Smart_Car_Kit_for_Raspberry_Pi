@@ -1,0 +1,5 @@
+rpi-lgpio
+pigpio
+opencv-python
+numpy
+pytest

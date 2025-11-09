@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-toolsai.jupyter",
+    "charliermarsh.ruff",
+    "ms-python.black-formatter",
+    "eamodio.gitlens",
+    "github.vscode-pull-request-github",
+    "ms-vscode-remote.remote-ssh"
+  ]
+}
