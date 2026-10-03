@@ -1,0 +1,177 @@
+Freenove Smart Car PCB V2 + Raspberry Pi 5 LED Fix
+====================================================
+
+Purpose
+-------
+This documents the working setup for the eight addressable RGB LEDs on the
+Freenove smart-car control board, for a Raspberry Pi 5 and Freenove PCB / adapter
+board Version 2.
+
+Hardware confirmed
+------------------
+- Raspberry Pi 5 Model B
+- Freenove connection/control board PCB Version 2
+- Eight addressable RGB LEDs around the board
+- S2 power switch ON
+- S3 5V load switch ON
+- Motors may remain unplugged while testing LEDs
+- SPI data path uses Raspberry Pi physical GPIO10 (SPI0 MOSI)
+- SPI clock uses physical GPIO11 (SPI0 SCLK)
+
+Important: do not add the GPIO10-to-GPIO18 jumper for PCB V2. PCB V2 is already
+intended to use GPIO10/SPI MOSI.
+
+What was wrong
+--------------
+1. SPI was disabled in /boot/firmware/config.txt.
+2. The driver was initially pointed at Linux SPI bus 10. On this Pi 5,
+   /dev/spidev10.0 is a different SPI controller.
+3. The Freenove LED driver must use /dev/spidev0.0 for the RP1 SPI controller
+   connected to physical GPIO10/GPIO11.
+4. The WS2812 SPI waveform must use the Freenove bus-0 timing: 6.4 MHz.
+   Sending the frame at 8 MHz did not light the LEDs.
+5. The bundled rpi_ws281x Python package was missing. The Freenove code imports
+   rpi_ledpixel.py even when PCB V2 uses the SPI backend, so the package must
+   still be installed.
+
+Required source configuration
+-----------------------------
+File:
+  Code/Server/spi_ledpixel.py
+
+The SPI LED class must have these defaults:
+
+  def __init__(self, count=8, bright=255, sequence='GRB', bus=0, device=0):
+
+  def led_begin(self, bus=0, device=0):
+
+The timing branches in write_ws2812_numpy8() and write_ws2812_numpy4() must
+continue to use the 6.4 MHz branch for bus 0:
+
+  if self.bus == 0:
+      self.spi.xfer(tx.tolist(), int(8 / 1.25e-6))
+
+and for the 4-bit path:
+
+  if self.bus == 0:
+      self.spi.xfer(tx.tolist(), int(4 / 1.25e-6))
+
+Do not change the defaults to bus=10. Although /dev/spidev10.0 may exist, it is
+not the Freenove GPIO10 LED path.
+
+Required board parameters
+-------------------------
+File:
+  Code/Server/params.json
+
+For this hardware:
+
+  {
+      "Connect_Version": 2,
+      "Pcb_Version": 2,
+      "Pi_Version": 2
+  }
+
+In this project, Pi_Version 2 means Raspberry Pi 5 in ParameterManager.
+
+Install the missing LED dependency
+----------------------------------
+From the Freenove repository root, install the bundled library:
+
+  cd ~/projects/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Libs/rpi-ws281x-python/library
+  sudo python3 setup.py install
+
+This compiles the bundled ARM64 extension and installs rpi_ws281x for the
+system Python used by sudo python3.
+
+Enable SPI without the menu
+----------------------------
+Run:
+
+  sudo raspi-config nonint do_spi 0
+  sudo reboot
+
+After reconnecting to the Pi, verify the physical pin mux:
+
+  pinctrl get 10-11
+
+Expected:
+
+  GPIO10 = SPI0_MOSI
+  GPIO11 = SPI0_SCLK
+
+Also verify the correct Linux SPI device exists:
+
+  ls -l /dev/spidev*
+
+Expected to include:
+
+  /dev/spidev0.0
+
+It is normal for a Pi 5 to also show /dev/spidev10.0. Use spidev0.0 for
+these LEDs.
+
+Run the LED test
+----------------
+With S2 and S3 ON, and preferably with motors unplugged:
+
+  cd ~/projects/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Server
+  sudo python3 test.py Led
+
+The eight LEDs should be driven through red, orange, yellow, green, cyan-blue,
+blue, purple, and white.
+
+A useful direct validation is:
+
+  cd ~/projects/Freenove_4WD_Smart_Car_Kit_for_Raspberry_Pi/Code/Server
+  sudo python3 - <<'PY'
+  from spi_ledpixel import Freenove_SPI_LedPixel
+  led = Freenove_SPI_LedPixel(8, 255, 'GRB')
+  print(f'bus={led.bus} device={led.device} initialized={led.led_init_state}')
+  led.set_all_led_color(255, 255, 255)
+  print('sent SPI0 all-white frame at 6.4MHz')
+  PY
+
+Expected:
+
+  bus=0 device=0 initialized=1
+  sent SPI0 all-white frame at 6.4MHz
+
+The test.py success message is unconditional, so it is not by itself proof that
+the LEDs emitted light. The direct output above proves the driver opened SPI0 and
+sent a frame; visual LED output confirms the complete physical path.
+
+Hardware checks if there is still no light
+-------------------------------------------
+- Confirm the board is actually PCB V2.
+- Confirm S2 and S3 are ON.
+- Confirm approximately 5V between the board 5V and GND with a multimeter.
+- Confirm the Pi-to-board integrated connector is fully seated and correctly
+  oriented.
+- Do not short adjacent pins while probing.
+- Do not test with the motors connected until the power/reboot issue is resolved.
+- Do not add a GPIO10-to-GPIO18 jumper to a PCB V2 board.
+
+Files changed in the working setup
+----------------------------------
+- Code/Server/spi_ledpixel.py: SPI defaults bus 0/device 0 and 6.4 MHz timing
+  for bus 0.
+- Code/Server/params.json: Connect_Version 2, Pcb_Version 2, Pi_Version 2.
+- Code/Libs/rpi-ws281x-python/library: bundled rpi_ws281x installed with
+  sudo python3 setup.py install.
+
+Optional reboot/network diagnostics
+-----------------------------------
+The separate TestProject diagnostics service records Pi boot ID, uptime,
+throttling, temperature, memory, kernel warnings, Wi-Fi signal, gateway ping,
+interface counters, and SSH events:
+
+  sudo systemctl status pi-diagnostics.service
+  sudo tail -100 /var/log/pi-diagnostics/health.log
+
+The ASUS router can send remote syslog to the Pi at UDP port 514. The receiver
+writes messages to:
+
+  /var/log/asus-router.log
+
+Do not copy router passwords or other credentials into this handoff file.
